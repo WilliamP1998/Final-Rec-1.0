@@ -10,19 +10,15 @@ import {
 } from "react-native";
 import { Asset } from "expo-asset";
 import { Audio } from "expo-av";
-import * as FileSystem from "expo-file-system";
 import * as Font from "expo-font";
 import * as Permissions from "expo-permissions";
-import {
-  Entypo,
-  Foundation,
-  FontAwesome,
-  Octicons,
-  MaterialIcons
-} from "@expo/vector-icons";
+import { Entypo, Foundation, FontAwesome, Octicons } from "@expo/vector-icons";
+import { soundArray } from "./CreateRecord";
 import Modal from "react-native-modal";
-import { sounds } from "../components/SoundForm";
-import { navigator } from "../navigationRef";
+import { Dropdown } from "react-native-material-dropdown";
+import Spacer from "../components/Spacer";
+import { AsyncStorage } from "react-native";
+var _ = require("underscore");
 
 class Icon {
   constructor(module, width, height) {
@@ -52,18 +48,26 @@ const ICON_THUMB_2 = new Icon(
 const { width: DEVICE_WIDTH, height: DEVICE_HEIGHT } = Dimensions.get("window");
 const BACKGROUND_COLOR = "#FFFFFF";
 const LIVE_COLOR = "#FF0000";
-const DISABLED_OPACITY = 0.5;
-const RATE_SCALE = 3.0;
 
 export default class CurrentRecord extends React.Component {
+  static navigationOptions = {
+    headerTitle: "Current Sound"
+  };
   constructor(props) {
     super(props);
+    this.duration = null;
+    this.retrievedSounds = [];
     this.currentSound = [];
     this.recording = null;
     this.sound = null;
     this.isSeeking = false;
     this.shouldPlayAtEndOfSeek = false;
     this.state = {
+      sounds: [],
+      numberOfLoops: null,
+      numLoop: null,
+      delay: null,
+      isPlayModalVisible: false,
       haveRecordingPermissions: false,
       isLoading: false,
       isPlaybackAllowed: false,
@@ -75,9 +79,9 @@ export default class CurrentRecord extends React.Component {
       isPlaying: false,
       isRecording: false,
       fontLoaded: false,
-      shouldCorrectPitch: true,
+
       volume: 1.0,
-      rate: 1.0,
+
       isModalVisible: false
     };
     this.recordingSettings = JSON.parse(
@@ -86,6 +90,14 @@ export default class CurrentRecord extends React.Component {
   }
 
   componentDidMount() {
+    this.getSounds().then(sounds => {
+      this.setState({
+        sounds: sounds
+      });
+      console.log(this.state.sounds);
+      this.loadAudio();
+    });
+
     (async () => {
       await Font.loadAsync({
         "cutive-mono-regular": require("../../assets/fonts/CutiveMono-Regular.ttf")
@@ -95,20 +107,128 @@ export default class CurrentRecord extends React.Component {
     this._askForPermissions();
   }
 
+  async loadAudio() {
+    const { navigation } = this.props;
+    const id = navigation.getParam("id");
+    // console.log(this.state.sounds);
+    this.sound = new Audio.Sound();
+    for (let i = 0; i < this.state.sounds.length; i++) {
+      if (this.state.sounds[i].id === id) {
+        this.currentSound = this.state.sounds[i];
+        console.log(this.currentSound);
+
+        break;
+      }
+    }
+    try {
+      await this.sound.loadAsync({
+        uri: this.currentSound.sound /* url for your audio file */
+      });
+      await this.sound.setOnPlaybackStatusUpdate(this._onPlaybackStatusUpdate);
+    } catch (e) {
+      console.log("ERROR Loading Audio", e);
+    }
+  }
+
+  getSounds = () =>
+    new Promise(function(resolve) {
+      AsyncStorage.getItem("soundArray").then(val => {
+        let retrievedSoundArray = JSON.parse(val);
+        return resolve(retrievedSoundArray);
+      });
+    });
+
+  _onPlaybackStatusUpdate = playbackStatus => {
+    if (playbackStatus.didJustFinish) {
+      if (this.state.numberOfLoops >= this.state.numLoop - 1) {
+        this.sound.pauseAsync();
+        this.sound.setIsLoopingAsync(false);
+        console.log("it's looping");
+        this.setState({ isPlaying: false });
+      } else if (this.state.numberOfLoops < this.state.numLoop - 1) {
+        this.setState({
+          numberOfLoops: this.state.numberOfLoops + 1
+        });
+
+        this.sound.pauseAsync();
+        setTimeout(() => {
+          this.sound.playAsync();
+          console.log("play the sound");
+        }, this.state.delay);
+        console.log(this.state.numberOfLoops);
+      }
+    }
+  };
+
+  _updateScreenForSoundStatus = status => {
+    if (status.isLoaded) {
+      this.setState({
+        soundDuration: status.durationMillis,
+        soundPosition: status.positionMillis,
+        shouldPlay: status.shouldPlay,
+        isPlaying: status.isPlaying,
+
+        muted: status.isMuted,
+        volume: status.volume,
+
+        isPlaybackAllowed: true
+      });
+    } else {
+      this.setState({
+        soundDuration: null,
+        soundPosition: null,
+        isPlaybackAllowed: false
+      });
+      if (status.error) {
+        console.log(`FATAL PLAYER ERROR: ${status.error}`);
+      }
+    }
+  };
+
   _askForPermissions = async () => {
     const response = await Permissions.askAsync(Permissions.AUDIO_RECORDING);
     this.setState({
       haveRecordingPermissions: response.status === "granted"
     });
   };
+  _pressPlayorPause = () => {
+    if (this.state.isPlaying === true) {
+      this.sound.pauseAsync();
+      this.setState({ isPlaying: !this.state.isPlaying });
+    } else {
+      this.togglePlayModal();
+    }
+  };
   _onPlayPausePressed = () => {
+    this.setState({ numberOfLoops: 0 });
     if (this.sound != null) {
-      if (this.state.isPlaying) {
+      if (this.state.isPlaying === true) {
         this.sound.pauseAsync();
+        this.setState({ isPlaying: !this.state.isPlaying });
       } else {
-        this.sound.playAsync();
+        this.togglePlayModal();
+        setTimeout(() => {
+          this.setState({ isPlaying: !this.state.isPlaying });
+          this.sound.setOnPlaybackStatusUpdate(this._onPlaybackStatusUpdate);
+          this.sound.setIsLoopingAsync(true);
+          this.sound.playAsync();
+          console.log(this.state.numLoop);
+          console.log("play the sound");
+        }, this.state.delay);
       }
     }
+  };
+
+  togglePlayModal = () => {
+    this.setState({ isPlayModalVisible: !this.state.isPlayModalVisible });
+    console.log(this.state.isPlayModalVisible);
+  };
+
+  handleLoop = value => {
+    this.setState({ numLoop: value });
+  };
+  handleDelay = value => {
+    this.setState({ delay: value * 1000 });
   };
 
   _onStopPressed = () => {
@@ -127,24 +247,6 @@ export default class CurrentRecord extends React.Component {
     if (this.sound != null) {
       this.sound.setVolumeAsync(value);
     }
-  };
-
-  _trySetRate = async (rate, shouldCorrectPitch) => {
-    if (this.sound != null) {
-      try {
-        await this.sound.setRateAsync(rate, shouldCorrectPitch);
-      } catch (error) {
-        // Rate changing could not be performed, possibly because the client's Android API is too old.
-      }
-    }
-  };
-
-  _onRateSliderSlidingComplete = async value => {
-    this._trySetRate(value * RATE_SCALE, this.state.shouldCorrectPitch);
-  };
-
-  _onPitchCorrectionPressed = async value => {
-    this._trySetRate(this.state.rate, !this.state.shouldCorrectPitch);
   };
 
   _onSeekSliderValueChange = value => {
@@ -214,18 +316,16 @@ export default class CurrentRecord extends React.Component {
   }
 
   render() {
-    const { navigation } = this.props;
-    const name = navigation.getParam("name");
-
-    this.sound = new Audio.Sound();
-
-    for (let i = 0; i < sounds.length; i++) {
-      if (sounds[i].name === name) {
-        this.currentSound = sounds[i];
-        this.sound.loadAsync(this.currentSound.sound);
-        console.log(this.sound);
-      }
-    }
+    const repeatOptions = _.range(1, 100, 1).map((item, index) => {
+      return {
+        value: item
+      };
+    });
+    const delayOptions = _.range(0, 30, 0.5).map((item, index) => {
+      return {
+        value: item
+      };
+    });
     if (!this.state.fontLoaded) {
       return <View style={styles.emptyContainer} />;
     }
@@ -250,6 +350,23 @@ export default class CurrentRecord extends React.Component {
 
     return (
       <View style={styles.container}>
+        <View>
+          <View>
+            <Text style={{ fontSize: 30, textAlign: "center" }}>
+              {this.currentSound.name}
+            </Text>
+          </View>
+          <View>
+            <Text
+              style={{
+                fontSize: 20,
+                textAlign: "center"
+              }}
+            >
+              {this.currentSound.desc}
+            </Text>
+          </View>
+        </View>
         <View style={[styles.halfScreenContainer]}>
           <View />
           <View style={styles.playbackContainer}>
@@ -297,7 +414,7 @@ export default class CurrentRecord extends React.Component {
               <TouchableHighlight
                 underlayColor={BACKGROUND_COLOR}
                 style={styles.wrapper}
-                onPress={this._onPlayPausePressed}
+                onPress={this._pressPlayorPause}
               >
                 {this.state.isPlaying ? (
                   <Foundation name="pause" size={58} />
@@ -305,6 +422,30 @@ export default class CurrentRecord extends React.Component {
                   <Foundation name="play" size={58} />
                 )}
               </TouchableHighlight>
+              <Modal isVisible={this.state.isPlayModalVisible}>
+                <View style={{ flex: 1 }}>
+                  <Button title="Cancel" onPress={this.togglePlayModal} />
+                  <Spacer>
+                    <Text style={styles.Header} h3>
+                      Choose your option
+                    </Text>
+                    <Dropdown
+                      label="Loop"
+                      data={repeatOptions}
+                      onChangeText={this.handleLoop}
+                    />
+                    <Dropdown
+                      label="Delay"
+                      data={delayOptions}
+                      onChangeText={this.handleDelay}
+                    />
+                  </Spacer>
+
+                  <Spacer>
+                    <Button title="Play" onPress={this._onPlayPausePressed} />
+                  </Spacer>
+                </View>
+              </Modal>
               <TouchableHighlight
                 underlayColor={BACKGROUND_COLOR}
                 style={styles.wrapper}
@@ -314,34 +455,6 @@ export default class CurrentRecord extends React.Component {
               </TouchableHighlight>
             </View>
             <View />
-          </View>
-          <View
-            style={[
-              styles.buttonsContainerBase,
-              styles.buttonsContainerBottomRow
-            ]}
-          >
-            <Text
-              style={[styles.timestamp, { fontFamily: "cutive-mono-regular" }]}
-            >
-              Rate:
-            </Text>
-            <Slider
-              style={styles.rateSlider}
-              trackImage={ICON_TRACK_1.module}
-              thumbImage={ICON_THUMB_1.module}
-              value={this.state.rate / RATE_SCALE}
-              onSlidingComplete={this._onRateSliderSlidingComplete}
-            />
-            <TouchableHighlight
-              underlayColor={BACKGROUND_COLOR}
-              style={styles.wrapper}
-              onPress={this._onPitchCorrectionPressed}
-            >
-              <Text style={[{ fontFamily: "cutive-mono-regular" }]}>
-                PC: {this.state.shouldCorrectPitch ? "yes" : "no"}
-              </Text>
-            </TouchableHighlight>
           </View>
           <View />
         </View>
@@ -427,6 +540,10 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     paddingRight: 20
   },
+  Header: {
+    fontSize: 30,
+    color: "#FFFFFF"
+  },
   image: {
     backgroundColor: BACKGROUND_COLOR
   },
@@ -469,9 +586,5 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     paddingRight: 20,
     paddingLeft: 20
-  },
-
-  rateSlider: {
-    width: DEVICE_WIDTH / 2.0
   }
 });
